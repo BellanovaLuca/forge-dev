@@ -1,0 +1,28 @@
+# Credenziali e dati sensibili
+api-token.txt
+*.token
+.env
+.env.*
+*.secret
+
+# Output dell'ingestion (contenuto Confluence estratto)
+output/
+
+# Configurazione locale Claude Code
+.claude/
+
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Log
+*.log

@@ -1,0 +1,66 @@
+modules:
+  # 1. Dashboard a tutta pagina
+  confluence:globalPage:
+    - key: forge-dev-test-hello-world
+      resource: main
+      resolver:
+        function: resolver
+      title: Assistente AI (Full Page)
+      route: hello-world
+
+  # 2. Popup Modale (Menu tre puntini "...")
+  confluence:contentAction:
+    - key: chat-modal-action
+      resource: main
+      resolver:
+        function: resolver
+      title: Chiedi all'Assistente AI (Popup)
+      viewportSize: large
+
+  # 3. SPACE PAGE (Sidebar sinistra dello space - sempre accessibile)
+  confluence:spacePage:
+    - key: chat-contextual-gadget
+      resource: main
+      resolver:
+        function: resolver
+      title: Assistente AI
+      route: rag-space-panel
+
+  # 4. BYLINE ITEM (Sotto il titolo di ogni pagina - sempre visibile)
+  confluence:contentBylineItem:
+    - key: chat-byline-item
+      resource: main
+      resolver:
+        function: resolver
+      title: Assistente AI
+
+  # 5. PAGE BANNER (Banner in cima ad ogni pagina)
+  confluence:pageBanner:
+    - key: chat-page-banner
+      resource: main
+      resolver:
+        function: resolver
+      title: Assistente AI
+
+  function:
+    - key: resolver
+      handler: index.handler
+
+resources:
+  - key: main
+    path: static/hello-world/build
+
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/8751d778-da01-4063-b234-1fae14f7006d
+
+permissions:
+  scopes:
+    - read:confluence-content.summary
+  external:
+    fetch:
+      backend:
+        - '*'  # TODO: sostituire con l'URL esatto del backend, es. 'https://tuo-backend.com'
