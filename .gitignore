@@ -3,6 +3,7 @@ api-token.txt
 *.token
 .env
 .env.*
+!.env.example
 *.secret
 
 # Output dell'ingestion (contenuto Confluence estratto)

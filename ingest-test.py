@@ -3,10 +3,17 @@ Script di ingestion della Knowledge Base da Atlassian Confluence/Jira.
 Scarica le pagine in formato Markdown e le salva in output/{spaceKey}/
 
 Prerequisiti: Python 3.8+, nessuna dipendenza esterna (solo stdlib).
+
+Variabili d'ambiente richieste (file .env oppure export):
+  ATLASSIAN_SITE=tuo-sito.atlassian.net
+  ATLASSIAN_EMAIL=tuo@email.com
+  ATLASSIAN_TOKEN=your_api_token   (oppure crea api-token.txt)
+
 Uso:
-  python ingest-test.py                        # usa email di default
-  python ingest-test.py tua@email.com          # email esplicita
-  python ingest-test.py tua@email.com --one    # solo la prima pagina (test rapido)
+  python ingest-test.py                        # usa ATLASSIAN_EMAIL
+  python ingest-test.py tua@email.com          # email esplicita (sovrascrive env)
+  python ingest-test.py --one                  # solo la prima pagina (test rapido)
+  python ingest-test.py tua@email.com --one
 """
 
 import sys
@@ -21,14 +28,30 @@ from urllib.error import HTTPError, URLError
 
 # ─── Configurazione ───────────────────────────────────────────────────────────
 
-SCRIPT_DIR  = Path(__file__).parent
-SITE        = "bellanovaluca.atlassian.net"
-args        = sys.argv[1:]
-EMAIL       = next((a for a in args if not a.startswith("--")), None) or \
-              os.environ.get("ATLASSIAN_EMAIL", "bellanova.luca@yahoo.it")
-ONE_PAGE    = "--one" in args
-API_TOKEN   = (SCRIPT_DIR / "api-token.txt").read_text(encoding="utf-8").strip()
-OUTPUT_DIR  = SCRIPT_DIR / "output"
+SCRIPT_DIR = Path(__file__).parent
+args       = sys.argv[1:]
+
+SITE = os.environ.get("ATLASSIAN_SITE")
+if not SITE:
+    sys.exit("[ERRORE] ATLASSIAN_SITE non impostata.\n  Esempio: export ATLASSIAN_SITE=tuo-sito.atlassian.net")
+
+_email_arg = next((a for a in args if not a.startswith("--")), None)
+EMAIL = _email_arg or os.environ.get("ATLASSIAN_EMAIL")
+if not EMAIL:
+    sys.exit("[ERRORE] ATLASSIAN_EMAIL non impostata.\n  Esempio: export ATLASSIAN_EMAIL=tuo@email.com")
+
+ONE_PAGE = "--one" in args
+
+_token_env = os.environ.get("ATLASSIAN_TOKEN")
+if _token_env:
+    API_TOKEN = _token_env
+else:
+    _token_file = SCRIPT_DIR / "api-token.txt"
+    if not _token_file.exists():
+        sys.exit("[ERRORE] ATLASSIAN_TOKEN non impostata e api-token.txt non trovato.")
+    API_TOKEN = _token_file.read_text(encoding="utf-8").strip()
+
+OUTPUT_DIR = SCRIPT_DIR / "output"
 
 BASE_CONFLUENCE = f"https://{SITE}/wiki"
 BASE_JIRA       = f"https://{SITE}"
@@ -97,10 +120,11 @@ def resolve_all_parents(raw_pages: list) -> dict:
     return known
 
 
-ROOT_PAGE_ID = "65817"
-
-def build_path_map(raw_pages: list, node_map: dict) -> dict:
-    """Restituisce {pageId: [titolo_safe_antenato1, ...]} usando pagine + folder risolte."""
+def build_path_map(raw_pages: list, node_map: dict, root_page_id: str | None) -> dict:
+    """
+    Restituisce {pageId: [titolo_safe_antenato1, ...]} usando pagine + folder risolte.
+    root_page_id è la home page dello space: non compare nel percorso dei file figli.
+    """
     cache = {}
 
     def get_ancestors(pid):
@@ -115,7 +139,8 @@ def build_path_map(raw_pages: list, node_map: dict) -> dict:
             cache[pid] = []
             return []
         parent = node_map[parent_id]
-        if not parent.get("title") or parent["id"] == ROOT_PAGE_ID:
+        # Ferma la risalita alla home page dello space o a nodi senza titolo
+        if not parent.get("title") or (root_page_id and parent["id"] == root_page_id):
             cache[pid] = []
             return []
         parent_ancestors = get_ancestors(parent_id)
@@ -133,7 +158,7 @@ def _strip_tags(s: str) -> str:
 
 # ─── Conversione Storage XML → Markdown ───────────────────────────────────────
 
-def storage_to_markdown(xml: str, title: str = "", site: str = SITE) -> str:
+def storage_to_markdown(xml: str, title: str = "") -> str:
     md = xml
 
     # 1. Blocchi di codice Confluence (CDATA)
@@ -257,7 +282,7 @@ def check_auth():
     except HTTPError as e:
         if e.code == 401:
             print("  [ERRORE 401] Credenziali non valide.")
-            print("  Uso: python ingest-test.py tua@email.com")
+            print("  Verifica ATLASSIAN_EMAIL e ATLASSIAN_TOKEN (o api-token.txt)")
         elif e.code == 403:
             print("  [ERRORE 403] Token privo di permessi Confluence.")
         else:
@@ -311,7 +336,17 @@ def get_all_pages_from_space(space_id: str, space_key: str, space_name: str):
             time.sleep(REQUEST_DELAY)
 
     print(f"\n  Pagine scaricate: {len(pages)}")
-    return pages, raw_pages
+
+    # Identifica la home page dello space: è la pagina il cui parentId non è
+    # tra le pagine scaricate (cioè punta al nodo radice dello space).
+    page_ids = {p["id"] for p in raw_pages}
+    root_page = next(
+        (p for p in raw_pages if p.get("parentId") and p["parentId"] not in page_ids),
+        None
+    )
+    root_page_id = root_page["id"] if root_page else None
+
+    return pages, raw_pages, root_page_id
 
 
 def report_pages(pages: list):
@@ -344,14 +379,14 @@ def simulate_chunking(pages: list, chunk_size: int = 500, overlap: int = 50) -> 
     return chunks
 
 
-def save_pages_as_markdown(raw_pages: list, space_key: str) -> Path:
+def save_pages_as_markdown(raw_pages: list, space_key: str, root_page_id: str | None) -> Path:
     print_sep(f"SALVATAGGIO — output/{space_key}/ (struttura gerarchica)")
 
     print("  Risoluzione folder Confluence...")
     node_map = resolve_all_parents(raw_pages)
     print(f"  Nodi totali risolti (pagine + folder): {len(node_map)}\n")
 
-    path_map = build_path_map(raw_pages, node_map)
+    path_map = build_path_map(raw_pages, node_map, root_page_id)
     base     = OUTPUT_DIR / space_key
     saved    = 0
 
@@ -396,7 +431,9 @@ def main():
         target = spaces[0]
         print(f'\n  → Space selezionato: "{target["name"]}" [{target["key"]}]')
 
-        pages, raw_pages = get_all_pages_from_space(target["id"], target["key"], target["name"])
+        pages, raw_pages, root_page_id = get_all_pages_from_space(
+            target["id"], target["key"], target["name"]
+        )
 
         if not pages:
             print("  Space vuoto o senza permessi.")
@@ -405,7 +442,7 @@ def main():
         report_pages(pages)
         simulate_chunking(pages)
 
-        out_dir = save_pages_as_markdown(raw_pages, target["key"])
+        save_pages_as_markdown(raw_pages, target["key"], root_page_id)
 
         # Anteprima del primo file con contenuto
         first = next((p for p in raw_pages

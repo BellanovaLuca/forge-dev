@@ -3,10 +3,17 @@
  * Scarica le pagine in formato Markdown e le salva in output/{spaceKey}/
  *
  * Prerequisiti: Node.js 18+, nessuna dipendenza npm.
+ *
+ * Variabili d'ambiente richieste (file .env oppure export):
+ *   ATLASSIAN_SITE=tuo-sito.atlassian.net
+ *   ATLASSIAN_EMAIL=tuo@email.com
+ *   ATLASSIAN_TOKEN=your_api_token   (oppure crea api-token.txt)
+ *
  * Uso:
- *   node ingest-test.mjs                          # usa email di default
- *   node ingest-test.mjs tua@email.com            # email esplicita
- *   node ingest-test.mjs tua@email.com --one      # scarica solo la prima pagina (test rapido)
+ *   node ingest-test.mjs                          # usa ATLASSIAN_EMAIL
+ *   node ingest-test.mjs tua@email.com            # email esplicita (sovrascrive env)
+ *   node ingest-test.mjs --one                    # scarica solo la prima pagina (test)
+ *   node ingest-test.mjs tua@email.com --one
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
@@ -17,11 +24,33 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 
 // ─── Configurazione ───────────────────────────────────────────────────────────
 
-const SITE      = 'bellanovaluca.atlassian.net';
-const EMAIL     = process.argv[2]?.startsWith('--') ? 'bellanova.luca@yahoo.it'
-                : process.argv[2] ?? process.env.ATLASSIAN_EMAIL ?? 'bellanova.luca@yahoo.it';
-const ONE_PAGE  = process.argv.includes('--one');   // modalità test: scarica solo 1 pagina
-const API_TOKEN = readFileSync(join(__dir, 'api-token.txt'), 'utf8').trim();
+const SITE = process.env.ATLASSIAN_SITE;
+if (!SITE) {
+  console.error('[ERRORE] ATLASSIAN_SITE non impostata.\n  Esempio: export ATLASSIAN_SITE=tuo-sito.atlassian.net');
+  process.exit(1);
+}
+
+const _emailArg = process.argv[2]?.startsWith('--') ? null : process.argv[2];
+const EMAIL = _emailArg ?? process.env.ATLASSIAN_EMAIL;
+if (!EMAIL) {
+  console.error('[ERRORE] ATLASSIAN_EMAIL non impostata.\n  Esempio: export ATLASSIAN_EMAIL=tuo@email.com');
+  process.exit(1);
+}
+
+const ONE_PAGE = process.argv.includes('--one');
+
+let API_TOKEN;
+if (process.env.ATLASSIAN_TOKEN) {
+  API_TOKEN = process.env.ATLASSIAN_TOKEN;
+} else {
+  try {
+    API_TOKEN = readFileSync(join(__dir, 'api-token.txt'), 'utf8').trim();
+  } catch {
+    console.error('[ERRORE] ATLASSIAN_TOKEN non impostata e api-token.txt non trovato.');
+    process.exit(1);
+  }
+}
+
 const OUTPUT_DIR = join(__dir, 'output');
 
 const BASE_CONFLUENCE = `https://${SITE}/wiki`;
@@ -103,9 +132,9 @@ async function resolveAllParents(rawPages) {
 
 /**
  * Costruisce la mappa pageId → percorso cartelle (array di titoli-safe degli antenati).
- * Usa la mappa completa che include sia pagine che folder risolte.
+ * rootPageId è la home page dello space: non compare nel percorso dei file figli.
  */
-function buildPathMap(rawPages, nodeMap) {
+function buildPathMap(rawPages, nodeMap, rootPageId) {
   const cache = new Map();
 
   function getAncestors(id) {
@@ -115,13 +144,12 @@ function buildPathMap(rawPages, nodeMap) {
 
     const parentId = node.parentId;
     if (!parentId || !nodeMap.has(parentId)) {
-      // root: non contribuisce al percorso
       cache.set(id, []);
       return [];
     }
     const parent = nodeMap.get(parentId);
-    // Salta i nodi senza titolo (root space) e la pagina root KB
-    if (!parent.title || parent.id === '65817') {
+    // Ferma la risalita quando raggiunge la home page dello space o un nodo senza titolo
+    if (!parent.title || (rootPageId && parent.id === rootPageId)) {
       cache.set(id, []);
       return [];
     }
@@ -244,14 +272,14 @@ function _strip(s = '') {
 
 // ─── Salvataggio su disco ──────────────────────────────────────────────────────
 
-async function savePagesAsMarkdown(rawPages, spaceKey) {
+async function savePagesAsMarkdown(rawPages, spaceKey, rootPageId) {
   printSeparator(`SALVATAGGIO — output/${spaceKey}/ (struttura gerarchica)`);
 
   console.log('  Risoluzione folder Confluence...');
   const nodeMap = await resolveAllParents(rawPages);
   console.log(`  Nodi totali risolti (pagine + folder): ${nodeMap.size}\n`);
 
-  const pathMap = buildPathMap(rawPages, nodeMap);
+  const pathMap = buildPathMap(rawPages, nodeMap, rootPageId);
   let saved = 0;
 
   for (const raw of rawPages) {
@@ -292,7 +320,7 @@ async function checkAuth() {
 
   if (resp.status === 401 || !isJson) {
     console.error('  [ERRORE 401] Credenziali non valide.');
-    console.error('  Uso: node ingest-test.mjs tua@email.com\n');
+    console.error('  Verifica ATLASSIAN_EMAIL e ATLASSIAN_TOKEN (o api-token.txt)\n');
     process.exit(1);
   }
   if (resp.status === 403) {
@@ -346,7 +374,13 @@ async function getAllPagesFromSpace(spaceId, spaceKey, spaceName) {
   }
 
   console.log(`\n  Pagine scaricate: ${pages.length}`);
-  return { pages, rawPages };
+
+  // Identifica la home page dello space: è la pagina il cui parentId non è
+  // tra le pagine scaricate (cioè punta al nodo radice dello space).
+  const pageIds = new Set(rawPages.map(p => p.id));
+  const rootPageId = rawPages.find(p => p.parentId && !pageIds.has(p.parentId))?.id ?? null;
+
+  return { pages, rawPages, rootPageId };
 }
 
 function reportPages(pages) {
@@ -404,7 +438,7 @@ async function main() {
     const targetSpace = spaces[0];
     console.log(`\n  → Space selezionato: "${targetSpace.name}" [${targetSpace.key}]`);
 
-    const { pages, rawPages } = await getAllPagesFromSpace(
+    const { pages, rawPages, rootPageId } = await getAllPagesFromSpace(
       targetSpace.id, targetSpace.key, targetSpace.name
     );
 
@@ -417,7 +451,7 @@ async function main() {
     simulateChunking(pages);
 
     // Salva le pagine come file .md
-    const outputDir = await savePagesAsMarkdown(rawPages, targetSpace.key);
+    const outputDir = await savePagesAsMarkdown(rawPages, targetSpace.key, rootPageId);
 
     // Mostra anteprima del primo file salvato con contenuto
     const firstWithContent = rawPages.find(p => (p.body?.storage?.value ?? '').length > 100);
