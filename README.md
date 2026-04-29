@@ -34,22 +34,22 @@ Tutte le 5 modalità di accesso condividono **la stessa build React** (`static/h
 ## Struttura del Progetto
 
 ```
-forge-dev-test/                      ← cartella padre
+forge-dev/                           ← root del progetto (git repo)
+├── manifest.yml                     ← 5 moduli Forge + permessi egress
+├── package.json
+├── src/
+│   └── index.js                     ← Resolver: bridge verso il backend esterno
+├── static/hello-world/
+│   ├── src/
+│   │   └── App.js                   ← UI React adattiva (tutti i contesti)
+│   └── build/                       ← build produzione (generato da npm run build)
 ├── ingest-test.mjs                  ← script ingestion Node.js
 ├── ingest-test.py                   ← script ingestion Python
+├── .env.example                     ← template variabili d'ambiente
 ├── api-token.txt                    ← token Atlassian (NON in git — vedere .gitignore)
-├── output/                          ← file .md generati dall'ingestion (NON in git)
-│   └── KB/
-│       └── ...
-│
-└── forge-dev-test/                  ← root dell'app Forge
-    ├── manifest.yml                 ← 5 moduli Forge + permessi egress
-    ├── src/
-    │   └── index.js                 ← Resolver: bridge verso il backend esterno
-    └── static/hello-world/
-        ├── src/
-        │   └── App.js               ← UI React adattiva (tutti i contesti)
-        └── build/                   ← build produzione (generato da npm run build)
+└── output/                          ← file .md generati dall'ingestion (NON in git)
+    └── KB/
+        └── ...
 ```
 
 ---

@@ -12,6 +12,12 @@ output/
 # Configurazione locale Claude Code
 .claude/
 
+# Forge
+.forge/
+
+# IDE
+.idea/
+
 # Node
 node_modules/
 dist/
